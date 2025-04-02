@@ -18,6 +18,7 @@
 #include "CUDAMoments.cu"
 #include "HostCUDA.h"
 #include "EwaldCUDA.h"
+#include "GPUMemoryPool.h"  // Include the memory pool header
 
 #include "hapi.h"
 #include "cuda_typedef.h"
@@ -618,10 +619,12 @@ void TreePieceDataTransferBasic(CudaRequest *data, CudaDevPtr *ptr){
   size_t markerSize = (numBucketsPlusOne) * sizeof(int);
   size_t startSize = (numBuckets) * sizeof(int);
 
-  cudaChk(cudaMalloc(&ptr->d_list, listSize));
-  cudaChk(cudaMalloc(&ptr->d_bucketMarkers, markerSize));
-  cudaChk(cudaMalloc(&ptr->d_bucketStarts, startSize));
-  cudaChk(cudaMalloc(&ptr->d_bucketSizes, startSize));
+  // Use GPU memory pool for allocations
+  cudaChk(gpuPoolMalloc(&ptr->d_list, listSize));
+  cudaChk(gpuPoolMalloc(&ptr->d_bucketMarkers, markerSize));
+  cudaChk(gpuPoolMalloc(&ptr->d_bucketStarts, startSize));
+  cudaChk(gpuPoolMalloc(&ptr->d_bucketSizes, startSize));
+  
   cudaChk(cudaMemcpyAsync(ptr->d_list, data->list, listSize, cudaMemcpyHostToDevice, stream));
   cudaChk(cudaMemcpyAsync(ptr->d_bucketMarkers, data->bucketMarkers, markerSize, cudaMemcpyHostToDevice, stream));
   cudaChk(cudaMemcpyAsync(ptr->d_bucketStarts, data->bucketStarts, startSize, cudaMemcpyHostToDevice, stream));
@@ -640,10 +643,11 @@ void TreePieceDataTransferBasic(CudaRequest *data, CudaDevPtr *ptr){
 /// @brief Free device memory used for interaction list and bucket data
 /// @param ptr CudaDevPtr object that stores handles to device memory
 void TreePieceDataTransferBasicCleanup(CudaDevPtr *ptr){
-  cudaChk(cudaFree(ptr->d_list));
-  cudaChk(cudaFree(ptr->d_bucketMarkers));
-  cudaChk(cudaFree(ptr->d_bucketStarts));
-  cudaChk(cudaFree(ptr->d_bucketSizes));
+  // Use GPU memory pool for deallocations
+  cudaChk(gpuPoolFree(ptr->d_list));
+  cudaChk(gpuPoolFree(ptr->d_bucketMarkers));
+  cudaChk(gpuPoolFree(ptr->d_bucketStarts));
+  cudaChk(gpuPoolFree(ptr->d_bucketSizes));
 }
 
 /** @brief Transfer forces from the GPU back to the host. Also schedules

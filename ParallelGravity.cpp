@@ -49,6 +49,7 @@
 #ifdef CUDA
 // for default per-list parameters
 #include "cuda_typedef.h"
+#include "GPUMemoryPool.h"  // For memory pool reporting
 #endif
 
 extern char *optarg;
@@ -1944,6 +1945,14 @@ void Main::advanceBigStep(int iStep) {
   int activeRung = 0;  // the minimum rung that is active
   int nextMaxRung = 0; // the rung that determines the smallest time for advancing
 
+#ifdef CUDA
+  // Reset GPU memory pool analytics counters at the start of each timestep
+  if (verbosity) {
+    CkPrintf("Resetting GPU memory pool analytics counters for timestep %d\n", iStep);
+  }
+  // gpuPoolResetCounters();
+#endif
+
   while (currentStep < MAXSUBSTEPS) {
 
     if(!param.bStaticTest) {
@@ -3134,6 +3143,28 @@ Main::doSimulation()
   // delete param.stfm;
   // treeProxy.ckDestroy();
   // CkWaitQD();
+  
+#ifdef CUDA
+
+  // Only PE0 will print in the modified implementation
+    GPUMemoryPool::printConsolidatedReport();
+  
+  // Ensure all PEs are synchronized after printing
+  // contribute(CkCallback::resumeThread);
+    CkWaitQD();
+  // Optional: Uncomment the next line to enable detailed analytics for all PEs
+  // GPUMemoryPool::enableDetailedStatsAllPEs(true);
+  
+  // Optional: Uncomment the next line to print detailed analytics if enabled
+  // GPUMemoryPool::printConsolidatedDetailedStats();
+  
+  // Note: To disable verbose output from GPU memory pool (memory allocation/free messages),
+  // compile with -DGPU_POOL_QUIET added to your CXXFLAGS
+  
+  // Force cleanup of pools (normally happens at program termination)
+  // GPUMemoryPool::cleanupAllPools();
+#endif
+
   CkExit();
 }
 /**
