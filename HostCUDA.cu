@@ -2,10 +2,6 @@
 #define NOMINMAX
 #endif
 
-#ifdef HAPI_MEMPOOL
-#define GPU_MEMPOOL
-#endif
-
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
@@ -131,9 +127,9 @@ void DataManagerTransferLocalTree(void *moments, size_t sMoments,
 
   HAPI_TRACE_BEGIN();
 
-  cudaChk(cudaMalloc(d_localMoments, sMoments));
-  cudaChk(cudaMalloc(d_compactParts, sCompactParts));
-  cudaChk(cudaMalloc(d_varParts, sVarParts));
+  cudaChk(gpuPoolMalloc(d_localMoments, sMoments));
+  cudaChk(gpuPoolMalloc(d_compactParts, sCompactParts));
+  cudaChk(gpuPoolMalloc(d_varParts, sVarParts));
 
   cudaChk(cudaMemcpyAsync(*d_localMoments, moments, sMoments, cudaMemcpyHostToDevice, stream));
   cudaChk(cudaMemcpyAsync(*d_compactParts, compactParts, sCompactParts, cudaMemcpyHostToDevice, stream));
@@ -173,8 +169,8 @@ void DataManagerTransferRemoteChunk(void *moments, size_t sMoments,
 
   HAPI_TRACE_BEGIN();
 
-  cudaChk(cudaMalloc(d_remoteMoments, sMoments));
-  cudaChk(cudaMalloc(d_remoteParts, sRemoteParts));
+  cudaChk(gpuPoolMalloc(d_remoteMoments, sMoments));
+  cudaChk(gpuPoolMalloc(d_remoteParts, sRemoteParts));
   cudaChk(cudaMemcpyAsync(*d_remoteMoments, moments, sMoments, cudaMemcpyHostToDevice, stream));
   cudaChk(cudaMemcpyAsync(*d_remoteParts, remoteParts, sRemoteParts, cudaMemcpyHostToDevice, stream));
 
@@ -338,7 +334,7 @@ void TreePieceCellListDataTransferRemoteResume(CudaRequest *data){
   printf("(%d) TRANSFER REMOTE RESUME CELL\n", CmiMyPe());
 #endif
 
-  cudaChk(cudaMalloc(&d_missedNodes, data->sMissed));
+  cudaChk(gpuPoolMalloc(&d_missedNodes, data->sMissed));
   cudaChk(cudaMemcpyAsync(d_missedNodes, data->missedNodes, data->sMissed, cudaMemcpyHostToDevice, stream));
 
 #ifdef CUDA_NOTIFY_DATA_TRANSFER_DONE
@@ -368,7 +364,7 @@ void TreePieceCellListDataTransferRemoteResume(CudaRequest *data){
       );
 #endif
   TreePieceDataTransferBasicCleanup(&devPtr);
-  cudaChk(cudaFree(d_missedNodes));
+  cudaChk(gpuPoolFree(d_missedNodes));
   cudaChk(cudaPeekAtLastError());
   HAPI_TRACE_END(CUDA_REMOTE_RESUME);
 
@@ -407,7 +403,7 @@ void TreePiecePartListDataTransferLocalSmallPhase(CudaRequest *data, CompactPart
   printf("TPPartSmallPhase 0: %s\n", cudaGetErrorString( cudaGetLastError() ) );
 #endif
   memcpy(bufferHostBuffer, particles, size);
-  cudaChk(cudaMalloc(&d_smallParts, size));
+  cudaChk(gpuPoolMalloc(&d_smallParts, size));
   cudaChk(cudaMemcpyAsync(d_smallParts, bufferHostBuffer, size, cudaMemcpyHostToDevice, stream));
 
 #ifndef CUDA_NO_KERNELS
@@ -438,7 +434,7 @@ void TreePiecePartListDataTransferLocalSmallPhase(CudaRequest *data, CompactPart
   TreePieceDataTransferBasicCleanup(&devPtr);
   cudaChk(cudaPeekAtLastError());
   HAPI_TRACE_END(CUDA_PART_GRAV_LOCAL_SMALL);
-  cudaChk(cudaFree(d_smallParts));
+  cudaChk(gpuPoolFree(d_smallParts));
   hapiAddCallback(stream, data->cb);
 }
 
@@ -559,7 +555,7 @@ void TreePiecePartListDataTransferRemoteResume(CudaRequest *data){
   printf("(%d) TRANSFER REMOTE RESUME PART\n", CmiMyPe());
 #endif
 
-  cudaChk(cudaMalloc(&d_missedParts, data->sMissed));
+  cudaChk(gpuPoolMalloc(&d_missedParts, data->sMissed));
   cudaChk(cudaMemcpyAsync(d_missedParts, data->missedParts, data->sMissed, cudaMemcpyHostToDevice, stream));
 
 #ifdef CUDA_NOTIFY_DATA_TRANSFER_DONE
@@ -567,7 +563,7 @@ void TreePiecePartListDataTransferRemoteResume(CudaRequest *data){
         data->d_localParts,
         data->d_localVars,
         (CompactPartData *)d_missedParts,
-	data->list,
+        data->list,
         devPtr.d_list
         );
 #endif
@@ -599,7 +595,7 @@ void TreePiecePartListDataTransferRemoteResume(CudaRequest *data){
 #endif
 #endif
   TreePieceDataTransferBasicCleanup(&devPtr);
-  cudaChk(cudaFree(d_missedParts));
+  cudaChk(gpuPoolFree(d_missedParts));
   cudaChk(cudaPeekAtLastError());
   HAPI_TRACE_END(CUDA_PART_GRAV_REMOTE);
 

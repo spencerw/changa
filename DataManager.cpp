@@ -12,6 +12,7 @@
 #include "hapi.h"
 #include "cuda_typedef.h"
 #include "SFC.h"
+#include "GPUMemoryPool.h"
 #endif
 
 #include "Compute.h"
@@ -1098,11 +1099,11 @@ void DataManager::transferParticleVarsBack(){
 			     streams[0],
                              data->cb);
     
-    cudaFree(d_localMoments);
-    cudaFree(d_localParts);
-    cudaFree(d_localVars);
-    cudaFree(d_remoteMoments);
-    cudaFree(d_remoteParts); 
+    gpuPoolFree(d_localMoments);
+    gpuPoolFree(d_localParts);
+    gpuPoolFree(d_localVars);
+    gpuPoolFree(d_remoteMoments);
+    gpuPoolFree(d_remoteParts); 
 
 #ifdef CUDA_PRINT_ERRORS
     printf("transferParticleVarsBack: %s\n", cudaGetErrorString( cudaGetLastError() ) );

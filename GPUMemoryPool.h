@@ -6,20 +6,7 @@
 #include <map>
 #include <vector>
 #include <time.h>  // For timing analytics
-
-// Include Charm++ for all non-standalone test cases
-#ifndef STANDALONE_TEST
 #include "charm++.h"  // For CmiCreateLock, CmiLock, CmiUnlock, and CmiMyPe
-#else
-// Simplified version for standalone testing
-inline int CmiMyPe() { return 0; }
-// Simplified lock implementation for standalone testing
-typedef int CmiNodeLock;
-inline CmiNodeLock CmiCreateLock() { return 0; }
-inline void CmiLock(CmiNodeLock) {}
-inline void CmiUnlock(CmiNodeLock) {}
-inline void CmiDestroyLock(CmiNodeLock) {}
-#endif
 
 /**
  * @brief A GPU memory pool class for C++03 with thread-local pools for each PE.

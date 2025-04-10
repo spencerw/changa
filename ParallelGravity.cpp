@@ -1764,7 +1764,7 @@ void Main::startGravity(const CkCallback& cbGravity, int iActiveRung,
 #ifdef CUDA
         if (nActiveGrav > param.nGpuMinParts) CkPrintf("Gravity will be calculated on the GPU\n");
 #endif
-        CkPrintf("Calculating gravity (tree bucket, theta = %f) ... ", theta);
+        CkPrintf("Calculating gravity (tree bucket, theta = %f) ...\n", theta);
         *startTime = CkWallTimer();
         if(param.bConcurrentSph) {
 #ifdef PUSH_GRAVITY

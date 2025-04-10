@@ -10,6 +10,20 @@ GPUMemoryPool::GPUMemoryPool() {
     GPU_POOL_VERBOSE_PRINT("Initializing memory pool...\n");
     fflush(stdout);
     
+    // Print debug configuration values
+    GPU_POOL_VERBOSE_PRINT("Debug Configuration - GPU_POOL_REPORTS: %d, GPU_POOL_VERBOSE: %d\n", 
+#ifdef GPU_POOL_REPORTS
+             GPU_POOL_REPORTS,
+#else
+             0,
+#endif
+#ifdef GPU_POOL_VERBOSE
+             1
+#else
+             0
+#endif
+            );
+    
     // Initialize analytics counters
     totalAllocations = 0;
     totalFrees = 0;
@@ -48,8 +62,8 @@ GPUMemoryPool::~GPUMemoryPool() {
         cudaError_t result = cudaFree(it->second);
         if (result != cudaSuccess) {
             // Just log the error but continue cleanup
-            CkPrintf("[GPUMemoryPool][PE %d] ERROR freeing block at %p: %s\n", 
-                    CmiMyPe(), it->second, cudaGetErrorString(result));
+            GPU_POOL_VERBOSE_PRINT("ERROR freeing block at %p: %s\n", 
+                    it->second, cudaGetErrorString(result));
             fflush(stdout);
         }
         blockCount++;
@@ -87,8 +101,8 @@ cudaError_t GPUMemoryPool::malloc(void** ptr, size_t size, const char* file, int
                 cudaError_t err = cudaGetLastError();
                 if (err != cudaSuccess) {
                     double elapsedTimeMicros = (getCurrentTimeSeconds() - startTime) * 1000000.0;
-                    CkPrintf("[GPUMemoryPool][PE %d] WARNING: Memory validation error on reused block %p: %s [%.2f μs]\n", 
-                           CmiMyPe(), *ptr, cudaGetErrorString(err), elapsedTimeMicros);
+                    GPU_POOL_VERBOSE_PRINT("WARNING: Memory validation error on reused block %p: %s [%.2f μs]\n", 
+                           *ptr, cudaGetErrorString(err), elapsedTimeMicros);
                     fflush(stdout);
                 }
                 delete[] testBuf;
@@ -149,8 +163,8 @@ cudaError_t GPUMemoryPool::malloc(void** ptr, size_t size, const char* file, int
             newAllocationTimes.push_back(record);
         }
     } else {
-        CkPrintf("[GPUMemoryPool][PE %d] CUDA ERROR: cudaMalloc failed for size %zu at %s:%d - Error: %s [%.2f μs]\n", 
-               CmiMyPe(), size, file, line, cudaGetErrorString(err), elapsedTimeMicros);
+        GPU_POOL_VERBOSE_PRINT("CUDA ERROR: cudaMalloc failed for size %zu at %s:%d - Error: %s [%.2f μs]\n", 
+               size, file, line, cudaGetErrorString(err), elapsedTimeMicros);
         fflush(stdout);
     }
     totalMallocTime += (getCurrentTimeSeconds() - startTime);
@@ -208,8 +222,8 @@ cudaError_t GPUMemoryPool::free(void* ptr, const char* file, int line) {
         // Let cudaFree handle it, but record it for debugging.
         cudaError_t result = cudaFree(ptr);
         double elapsedTimeMicros = (getCurrentTimeSeconds() - startTime) * 1000000.0;
-        CkPrintf("[GPUMemoryPool][PE %d] WARNING: Trying to free untracked block %p [%s:%d] [%.2f μs]\n", 
-               CmiMyPe(), ptr, file, line, elapsedTimeMicros);
+        GPU_POOL_VERBOSE_PRINT("WARNING: Trying to free untracked block %p [%s:%d] [%.2f μs]\n", 
+               ptr, file, line, elapsedTimeMicros);
         fflush(stdout);
         
         totalFreeTime += (getCurrentTimeSeconds() - startTime);
@@ -596,8 +610,7 @@ void GPUMemoryPool::printDetailedAnalytics() {
 #endif
 
     if (!detailedAnalyticsEnabled) {
-        CkPrintf("\n[GPUMemoryPool][PE %d] Detailed analytics not enabled. Enable with gpuPoolEnableDetailedStats(true)\n", 
-               CmiMyPe());
+        GPU_POOL_VERBOSE_PRINT("Detailed analytics not enabled. Enable with gpuPoolEnableDetailedStats(true)\n");
         fflush(stdout);
         return;
     }
