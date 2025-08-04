@@ -1,0 +1,36 @@
+name: Build and test on Jetstream2
+
+on:
+  workflow_dispatch: # Trigger manually from github
+
+jobs:
+  terraform:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: terraform
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v3
+
+    - name: Set up terraform
+      uses: hashicorp/setup-terraform@v3
+
+    - name: Terraform init
+      run: terraform init
+
+    - name: Terraform validate
+      run: terraform validate
+
+    - name: Terraform apply
+      # env variables go here
+      run: terraform apply -auto-approve
+
+    - name: Run tests
+      run: |
+        echo "Pretend to run tests here"
+
+    - name: Terraform destroy
+      if: always() # Clean up even if we have failures
+      run: terraform destroy -auto-approve
