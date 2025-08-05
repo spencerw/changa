@@ -17,6 +17,16 @@ jobs:
     - name: Set up terraform
       uses: hashicorp/setup-terraform@v3
 
+    - name: Set environment variables
+      run: |
+        echo "OS_AUTH_TYPE=v3applicationcredential" >> $GITHUB_ENV
+        echo "OS_AUTH_URL=https://js2.jetstream-cloud.org:5000/v3/" >> $GITHUB_ENV
+        echo "OS_IDENTITY_API_VERSION=3" >> $GITHUB_ENV
+        echo "OS_REGION_NAME=IU" >> $GITHUB_ENV
+        echo "OS_INTERFACE=public" >> $GITHUB_ENV
+        echo "OS_APPLICATION_CREDENTIAL_ID=${{ secrets.OS_APPLICATION_CREDENTIAL_ID }}" >> $GITHUB_ENV
+        echo "OS_APPLICATION_CREDENTIAL_SECRET=${{ secrets.OS_APPLICATION_CREDENTIAL_SECRET }}" >> $GITHUB_ENV
+
     - name: Terraform init
       run: terraform init
 
@@ -27,9 +37,43 @@ jobs:
       # env variables go here
       run: terraform apply -auto-approve
 
-    - name: Run tests
+    - name: Get instance IP
       run: |
-        echo "Pretend to run tests here"
+        echo "IP=$(terraform output -json floating_ip_ubuntu20 | jq -r '.[0]')" >> $GITHUB_ENV
+
+    - name: Add SSH key
+      run: |
+        echo "${{ secrets.JETSTREAM_SSH_KEY }}" > ~/jetstream_key.pem
+        chmod 600 ~/jetstream_key.pem
+
+    - name: Wait for instance to start
+      run: sleep 60
+
+    - name: SSH and build on instance
+      timeout-minutes: 30
+      run: |
+        ssh -o StrictHostKeyChecking=no -i ~/jetstream_key.pem ubuntu@$IP <<'EOF'
+          cd /changa-network/cicd
+          rm -rf changa charm utility
+          git clone https://github.com/charmplusplus/charm.git
+          cd charm
+          ./build ChaNGa mpi-linux-x86_64 smp --with-production -j8
+          cd ..
+          git clone https://github.com/spencerw/changa.git changa
+          git clone https://github.com/N-BodyShop/utility
+          cd changa
+          ./configure
+          make -j8
+        EOF
+
+    - name: Run tests
+      timeout-minutes: 30
+      run: |
+        ssh -o StrictHostKeyChecking=no -i ~/jetstream_key.pem ubuntu@$IP <<'EOF'
+          cd /changa-network/cicd/changa/teststep
+          ../ChaNGa.smp ++ppn 4 test_pg.param
+          make testenergy
+        EOF
 
     - name: Terraform destroy
       if: always() # Clean up even if we have failures

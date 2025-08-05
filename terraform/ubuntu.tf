@@ -6,11 +6,11 @@ resource "openstack_compute_instance_v2" "Ubuntu20" {
   name              = "terraform_Ubuntu20_${count.index}"
   flavor_id         = var.flavor_id
   key_pair          = var.public_key
-  security_groups   = ["terraform_ssh_ping", "default"]
+  security_groups   = ["${openstack_compute_secgroup_v2.terraform_ssh_ping_centos.name}", "default"]
   count             = var.vm_number
 
   network {
-    name = "terraform_network"
+    name = "terraform_network_changa"
   }
 
   image_id = var.image_id
@@ -19,8 +19,11 @@ resource "openstack_compute_instance_v2" "Ubuntu20" {
     terraform_controlled = "yes"
   }
 
+  user_data = templatefile("${path.module}/cloud_init.yaml.tmpl", {})
+
   depends_on = [
-    openstack_networking_network_v2.terraform_network
+    openstack_networking_network_v2.terraform_network_changa,
+    openstack_compute_secgroup_v2.terraform_ssh_ping_centos
   ]
 }
 

@@ -3,7 +3,7 @@ variable "vm_number" {
 }
 
 variable "flavor_id" {
-  default = "11"
+  default = "4"
 }
 
 variable "public_key" {
@@ -14,7 +14,7 @@ variable "public_key" {
 
 variable "image_id" {
   # replace this with the image id of the ubuntu iso you want to use
-  default = "572307fe-c809-4534-b22f-027d8e7b36df"
+  default = "85f48f90-f1ff-4311-b5ad-d95e8c4c9d23"
 }
 
 variable "network_id" {

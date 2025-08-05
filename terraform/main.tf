@@ -8,4 +8,7 @@ terraform {
   }
 }
 
-provider "openstack" { }
+provider "openstack" {
+  auth_url    = "https://js2.jetstream-cloud.org:5000/v3/"
+  region      = "IU"
+}
