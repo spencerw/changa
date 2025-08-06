@@ -384,7 +384,7 @@ void EntryTypeGravityNode::unpackSingle(CkCacheFillMsg<KeyType> *msg, Tree::Bina
   // needed for heterogeneous architectures.  Commented out for now
   // since it breaks on the PGI compiler.
 
-  // memcpy(node, &vptr, sizeof(void*));
+  memcpy(node, &vptr, sizeof(void*));
 
   if (!isRoot) CmiReference(UsrToEnv(msg));
   for (int i=0; i < 2; ++i) {

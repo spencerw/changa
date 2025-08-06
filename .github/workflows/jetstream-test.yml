@@ -80,13 +80,13 @@ jobs:
           rm -rf changa charm utility
           git clone https://github.com/charmplusplus/charm.git
           cd charm
-          ./build ChaNGa mpi-linux-x86_64 smp --with-production -j8
+          ./build ChaNGa mpi-linux-x86_64 smp --with-production -j4
           cd ..
           git clone -b cicd https://github.com/spencerw/changa.git changa
           git clone https://github.com/N-BodyShop/utility
           cd changa
           ./configure
-          make -j8
+          make -j4
         EOF
 
     - name: Run tests
@@ -94,7 +94,7 @@ jobs:
       run: |
         ssh -o StrictHostKeyChecking=no -i ~/jetstream_key ubuntu@$IP1 <<'EOF'
           cd /changa-network/cicd/changa/teststep
-          mpirun -np 2 --hostfile ~/hosts.txt --mca btl_tcp_if_include enp1s0 --mca plm_rsh_args "-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i ~/mpi_key" ../ChaNGa.smp ++ppn 2 +pemap 0-1 +commap 2 test_pg.param
+          mpirun -np 2 --hostfile ~/hosts.txt --mca btl_tcp_if_include enp1s0 --mca plm_rsh_args "-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i ~/mpi_key" ../ChaNGa.smp ++ppn 2 +pemap 0-1 +commap 2 +setcpuaffinity test_pg.param
           make testenergy
         EOF
 
