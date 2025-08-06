@@ -6,11 +6,11 @@ resource "openstack_compute_instance_v2" "Ubuntu20" {
   name              = "terraform_Ubuntu20_${count.index}"
   flavor_id         = var.flavor_id
   key_pair          = var.public_key
-  security_groups   = ["${openstack_compute_secgroup_v2.terraform_ssh_ping_centos.name}", "default"]
+  security_groups = ["spencerw_ssh_ping_changa_cicd", "default"]
   count             = var.vm_number
 
   network {
-    name = "terraform_network_changa"
+    uuid = data.openstack_networking_network_v2.spencerw_network_changa_cicd.id
   }
 
   image_id = var.image_id
@@ -19,12 +19,10 @@ resource "openstack_compute_instance_v2" "Ubuntu20" {
     terraform_controlled = "yes"
   }
 
-  user_data = templatefile("${path.module}/cloud_init.yaml.tmpl", {})
-
-  depends_on = [
-    openstack_networking_network_v2.terraform_network_changa,
-    openstack_compute_secgroup_v2.terraform_ssh_ping_centos
-  ]
+  user_data = templatefile("${path.module}/cloud_init.yaml.tmpl", {
+    jetstream_public_key = file("${path.module}/jetstream_key.pub")
+    mpi_public_key = file("${path.module}/mpi_key.pub")
+  })
 }
 
 ################
@@ -44,12 +42,19 @@ resource "openstack_compute_floatingip_associate_v2" "terraform_floatubntu20" {
   count       = var.vm_number
 }
 
-output "floating_ip_ubuntu20" {
+output "public_ips" {
   value       = openstack_networking_floatingip_v2.terraform_floatip_ubuntu20[*].address
-  description = "Public IP for Ubuntu 20"
+  description = "Public IP addresses of Ubuntu 20 instances"
 }
 
 output "private_ips" {
   value       = openstack_compute_instance_v2.Ubuntu20[*].access_ip_v4
   description = "Private IP addresses of Ubuntu20 instances"
+}
+
+output "rendered_user_data" {
+  value     = templatefile("${path.module}/cloud_init.yaml.tmpl", {
+    jetstream_public_key  = file("${path.module}/jetstream_key.pub")
+    mpi_public_key        = file("${path.module}/mpi_key.pub")
+  })
 }

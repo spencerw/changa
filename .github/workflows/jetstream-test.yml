@@ -5,6 +5,7 @@ on:
 
 jobs:
   terraform:
+    timeout-minutes: 30
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -34,32 +35,54 @@ jobs:
       run: terraform validate
 
     - name: Terraform apply
-      # env variables go here
+      working-directory: terraform
+      env:
+        TF_VAR_jetstream_private_key: ${{ secrets.JETSTREAM_SSH_KEY }}
+        TF_VAR_mpi_private_key: ${{ secrets.MPI_KEY }}
       run: terraform apply -auto-approve
 
-    - name: Get instance IP
+    - name: Add SSH key to runner
       run: |
-        echo "IP=$(terraform output -json floating_ip_ubuntu20 | jq -r '.[0]')" >> $GITHUB_ENV
+        echo "${{ secrets.JETSTREAM_SSH_KEY }}" > ~/jetstream_key
+        chmod 600 ~/jetstream_key
 
-    - name: Add SSH key
+    - name: Get IPs and set up host file
       run: |
-        echo "${{ secrets.JETSTREAM_SSH_KEY }}" > ~/jetstream_key.pem
-        chmod 600 ~/jetstream_key.pem
+        sleep 60 # Wait for instances to start
 
-    - name: Wait for instance to start
-      run: sleep 60
+        PUBLIC_IPS_JSON=$(terraform output -json public_ips)
+        PRIVATE_IPS_JSON=$(terraform output -json private_ips)
+
+        IP1=$(echo "$PUBLIC_IPS_JSON" | jq -r '.[0]')
+        echo "IP1=$IP1" >> $GITHUB_ENV
+        echo "Using IP1: $IP1"
+
+        echo "$PRIVATE_IPS_JSON" | jq -r '.[] + " slots=2"' > hosts.txt
+        scp -o StrictHostKeyChecking=no -i ~/jetstream_key hosts.txt ubuntu@$IP1:~/hosts.txt
+
+        echo "${{ secrets.MPI_KEY }}" > mpi_key
+        chmod 600 mpi_key
+        
+        mapfile -t IPS < <(echo "$PUBLIC_IPS_JSON" | jq -r '.[]')
+
+        for IP in "${IPS[@]}"; do
+          echo "Copying mpi_keys to $IP"
+          scp -o StrictHostKeyChecking=no -i ~/jetstream_key mpi_key.pub ubuntu@"$IP":~/mpi_key.pub
+          scp -o StrictHostKeyChecking=no -i ~/jetstream_key mpi_key ubuntu@"$IP":~/mpi_key
+        done
 
     - name: SSH and build on instance
-      timeout-minutes: 30
+      env:
+        IP1: ${{ env.IP1 }}
       run: |
-        ssh -o StrictHostKeyChecking=no -i ~/jetstream_key.pem ubuntu@$IP <<'EOF'
+        ssh -o StrictHostKeyChecking=no -i ~/jetstream_key ubuntu@$IP1 <<'EOF'
           cd /changa-network/cicd
           rm -rf changa charm utility
           git clone https://github.com/charmplusplus/charm.git
           cd charm
           ./build ChaNGa mpi-linux-x86_64 smp --with-production -j8
           cd ..
-          git clone https://github.com/spencerw/changa.git changa
+          git clone -b cicd https://github.com/spencerw/changa.git changa
           git clone https://github.com/N-BodyShop/utility
           cd changa
           ./configure
@@ -69,9 +92,9 @@ jobs:
     - name: Run tests
       timeout-minutes: 30
       run: |
-        ssh -o StrictHostKeyChecking=no -i ~/jetstream_key.pem ubuntu@$IP <<'EOF'
+        ssh -o StrictHostKeyChecking=no -i ~/jetstream_key ubuntu@$IP1 <<'EOF'
           cd /changa-network/cicd/changa/teststep
-          ../ChaNGa.smp ++ppn 4 test_pg.param
+          mpirun -np 2 --hostfile ~/hosts.txt --mca btl_tcp_if_include enp1s0 --mca plm_rsh_args "-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i ~/mpi_key" ../ChaNGa.smp ++ppn 2 +pemap 0-1 +commap 2 test_pg.param
           make testenergy
         EOF
 
