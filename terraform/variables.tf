@@ -14,7 +14,7 @@ variable "public_key" {
 
 variable "image_id" {
   # replace this with the image id of the ubuntu iso you want to use
-  default = "85f48f90-f1ff-4311-b5ad-d95e8c4c9d23"
+  default = "2bb30adf-7d23-41c3-a0a8-b2784a027946"
 }
 
 variable "network_id" {

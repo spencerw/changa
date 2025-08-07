@@ -57,7 +57,7 @@ jobs:
         echo "IP1=$IP1" >> $GITHUB_ENV
         echo "Using IP1: $IP1"
 
-        echo "$PRIVATE_IPS_JSON" | jq -r '.[] + " slots=2"' > hosts.txt
+        echo "$PRIVATE_IPS_JSON" | jq -r '.[] + " slots=1"' > hosts.txt
         scp -o StrictHostKeyChecking=no -i ~/jetstream_key hosts.txt ubuntu@$IP1:~/hosts.txt
 
         echo "${{ secrets.MPI_KEY }}" > mpi_key
@@ -75,6 +75,8 @@ jobs:
       env:
         IP1: ${{ env.IP1 }}
       run: |
+        # Commented out for testing
+        #if false; then
         ssh -o StrictHostKeyChecking=no -i ~/jetstream_key ubuntu@$IP1 <<'EOF'
           cd /changa-network/cicd
           rm -rf changa charm utility
@@ -88,6 +90,7 @@ jobs:
           ./configure
           make -j4
         EOF
+        #fi
 
     - name: Run tests
       timeout-minutes: 30
@@ -95,8 +98,19 @@ jobs:
         ssh -o StrictHostKeyChecking=no -i ~/jetstream_key ubuntu@$IP1 <<'EOF'
           cd /changa-network/cicd/changa/teststep
           mpirun -np 2 --hostfile ~/hosts.txt --mca btl_tcp_if_include enp1s0 --mca plm_rsh_args "-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i ~/mpi_key" ../ChaNGa.smp ++ppn 2 +pemap 0-1 +commap 2 +setcpuaffinity test_pg.param
-          make testenergy
         EOF
+
+    - name: Verify output and build plot
+      timeout-minutes: 30
+      run: |
+        ssh -o StrictHostKeyChecking=no -i ~/jetstream_key ubuntu@$IP1 <<'EOF'
+          cd /changa-network/cicd/changa/teststep
+          make testenergy
+          cd /changa-network/cicd/changa/terraform
+          python3 plotTimings.py ../teststep/pgtest_ms.timings
+          sh deployToDashboard.sh
+        EOF
+
 
     - name: Terraform destroy
       if: always() # Clean up even if we have failures

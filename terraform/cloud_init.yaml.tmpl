@@ -6,3 +6,8 @@ users:
     ssh-authorized-keys:
       - ${jetstream_public_key}
       - ${mpi_public_key}
+
+runcmd:
+  - mkdir -p /home/ubuntu/.ssh
+  - ssh-keyscan github.com >> /home/ubuntu/.ssh/known_hosts
+  - chown ubuntu:ubuntu /home/ubuntu/.ssh/known_hosts
