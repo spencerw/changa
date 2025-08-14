@@ -13,6 +13,7 @@
 #include "cuda_typedef.h"
 #include "SFC.h"
 #include "GPUMemoryPool.h"
+#include "PEList.h"
 #endif
 
 #include "Compute.h"
@@ -38,8 +39,9 @@ void DataManager::init() {
   treePiecesDonePrefetch = 0;
   treePiecesDoneLocalComputation = 0;
   treePiecesDoneRemoteChunkComputation = 0;
-  PEsWantParticlesBack = 0;
+  treePiecesWantParticlesBack = 0;
   treePiecesParticlesUpdated = 0;
+  bLocalDataReady = 0;
   gpuFree = true;
   cudaStreamCreate(&stream);
   memLog = new MemLog();
@@ -148,7 +150,6 @@ void DataManager::notifyPresence(Tree::GenericTreeNode *root, TreePiece *tp) {
   CmiLock(__nodelock);
   registeredTreePieces.push_back(TreePieceDescriptor(tp, root));
 #ifdef CUDA
-  registeredPEs.insert(tp->getParentPE());
   //gpuFree = true;
   //registeredTreePieceIndices.push_back(index);
 #if COSMO_PRINT_BK > 1
@@ -161,9 +162,6 @@ void DataManager::notifyPresence(Tree::GenericTreeNode *root, TreePiece *tp) {
 /// \brief Clear registeredTreePieces on this node.
 void DataManager::clearRegisteredPieces(const CkCallback& cb) {
     registeredTreePieces.removeAll();
-#ifdef CUDA
-    registeredPEs.clear();
-#endif
     contribute(cb);
 }
 
@@ -503,15 +501,15 @@ void DataManager::startEwaldGPU() {
         return;
     }
 
-    localTransferCallback
+    ewaldCallback
       = new CkCallback(CkIndex_DataManager::finishEwaldGPU(), CkMyNode(), dMProxy);
 
-    DataManagerEwald(d_localParts, d_localVars, ewt, cachedData, savedNumTotalParticles-1, stream, localTransferCallback);
+    DataManagerEwald(d_localParts, d_localVars, ewt, cachedData, savedNumTotalParticles-1, stream, ewaldCallback);
 }
 
 /// @brief Callback from Ewald kernel launch on GPU
 void DataManager::finishEwaldGPU() {
-  delete localTransferCallback;
+  delete ewaldCallback;
 
   freePinnedHostMemory(h_idata);
   freePinnedHostMemory(ewt);
@@ -581,6 +579,17 @@ void DataManager::startLocalWalk() {
                                                               (intptr_t)d_localParts,
                                                               (intptr_t)d_localVars,
                                                               sMoments, sCompactParts, sVarParts);
+
+    bLocalDataReady = 1;
+
+    // Check if any of the PEList kernels were delayed by the local data transfer
+    for (int i = 0; i < numPEListProxies; i++) {
+      if (PEListProxies[i]->ckLocalBranch()->isWaitingForLocalData()) {
+	CkPrintf("Proxy is waiting for local data on %d\n", CmiMyNode());
+        PEListProxies[i]->ckLocalBranch()->launchGPUKernel();
+      }
+    }
+
       treePieces[in].commenceCalculateGravityLocal();
     }
 
@@ -1068,13 +1077,20 @@ void updateParticlesCallback(void *, void *);
 
 /// @brief Copy particle accelerations back from GPU to host memory and
 ///        deallocate the device memory
+/// @param numTPs Number of TreePieces that are checking in
 /// This is triggered when all TreePieces call finishBucket
-void DataManager::transferParticleVarsBack(){
+void DataManager::transferParticleVarsBack(int numTPs){
   UpdateParticlesStruct *data;
   CmiLock(__nodelock);
-  PEsWantParticlesBack++;
-  if(PEsWantParticlesBack == registeredPEs.size()){
-    PEsWantParticlesBack = 0;
+
+  treePiecesWantParticlesBack += numTPs;
+  //CkPrintf("transferParticleVarsBack: %d TPs checking in, %d of %d\n", numTPs, treePiecesWantParticlesBack, registeredTreePieces.length());
+  if(treePiecesWantParticlesBack == registeredTreePieces.size()){
+    bLocalDataReady = 0;
+    treePiecesWantParticlesBack = 0;
+    for (int i = 0; i < numPEListProxies; i++) {
+      PEListProxies[i]->ckLocalBranch()->setGPUDone(0);
+    }
     VariablePartData *buf;
     
     if(savedNumTotalParticles > 0){

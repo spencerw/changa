@@ -177,6 +177,9 @@ extern CProxy_PEList peNodeRemoteResumeListProxy;
 extern CProxy_PEList pePartLocalListProxy;
 extern CProxy_PEList pePartRemoteListProxy;
 extern CProxy_PEList pePartRemoteResumeListProxy;
+
+extern CProxy_PEList* PEListProxies[];
+extern const int numPEListProxies;
 #endif
 
 extern CProxy_CkCacheManager<KeyType> cacheGravPart;
@@ -913,8 +916,6 @@ class TreePiece : public CBase_TreePiece {
         int NumberOfGPUParticles;
         BucketActiveInfo *bucketActiveInfo;
 
-	int getParentPE() { return CkMyPe(); }
-
 	// For accessing GPU memory
 	CudaMultipoleMoments *d_localMoments;
         CudaMultipoleMoments *d_remoteMoments;
@@ -1403,7 +1404,7 @@ private:
 	 * to trigger nextBucket() which will loop over all the buckets.
 	 */
 	void doAllBuckets();
-	void cudaFinishAllBuckets(int fromEwald);
+	void cudaFinishAllBuckets(int bFromEwald);
 	void cudaFinishAffectedBuckets(int *affectedBuckets, int numBuckets, int bRemote);
 	void reconstructNodeLookup(GenericTreeNode *node);
 	//void rebuildSFCTree(GenericTreeNode *node,GenericTreeNode *parent,int *);
@@ -1930,7 +1931,7 @@ public:
 
 	/// @brief Check if we have done with the treewalk on a specific bucket,
 	/// and if we have, check also if we are done with all buckets
-	void finishBucket(int iBucket);
+	void finishBucket(int iBucket, int bFromEwald);
 
 	/** @brief Routine which does the tree walk on non-local nodes. It is
 	 * called back for every incoming node (which are those requested to the
