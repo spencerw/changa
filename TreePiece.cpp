@@ -2,6 +2,7 @@
  */
 
 #include <cstdio>
+#include <cstdlib>
 #include <algorithm>
 #include <fstream>
 #include <assert.h>
@@ -3807,7 +3808,10 @@ void TreePiece::finishBucket(int iBucket) {
 #endif
 
   // XXX finished means Ewald is done.
-  if(req->finished && remaining == 0) {
+  // For numActiveBuckets==0 (all buckets inactive), remote counterArrays never
+  // get decremented (no interaction lists sent), so treat as complete.
+  if((req->finished && remaining == 0) ||
+     (numActiveBuckets == 0)) {
     sLocalGravityState->myNumParticlesPending -= 1;
 
 #ifdef COSMO_PRINT_BK
@@ -3939,13 +3943,46 @@ void TreePiece::doAllBuckets(){
 ///        Used by local tree walk and Ewald GPU operations
 /// @param fromEwald Flags whether this function was called after an Ewald calculation
 void TreePiece::cudaFinishAllBuckets(int fromEwald){
-  ListCompute *listcompute = (ListCompute *) sGravity;
   DoubleWalkState *state = (DoubleWalkState *)sLocalGravityState;
+
+  // When fromEwald=1, all GPU work (local walk + Ewald) is done. Any
+  // cudaFinishAffectedBuckets that were going to arrive have arrived. For
+  // buckets with no remote work, we never sent lists so remote counter stayed
+  // at numChunks. Force it to 0 so finishBucket can complete (avoids hang when
+  // one TP never reaches myNumParticlesPending==0).
+  if (fromEwald && !bUseCpu) {
+    for (int i = 0; i < numBuckets; ++i) {
+      if (sRemoteGravityState->counterArrays[0][i] > 0)
+        sRemoteGravityState->counterArrays[0][i] = 0;
+    }
+  }
 
   for (int i = 0; i < numBuckets; ++i) {
     if (fromEwald) bucketReqs[i].finished = 1;
     else state->counterArrays[0][i]--;
     finishBucket(i);
+  }
+  // TPs with no active buckets never send work to PEList, so finishedChunk is
+  // never called via the normal path. Inject chunk completion here.
+  // Skip cache finishedChunk—we never requested any remote particles, so the
+  // cache has no state for us. Only TreePiece::finishedChunk is needed.
+  // markWalkDone() requires completedActiveWalks==2 (bucket work + chunk work).
+  // Inactive TPs never get updateParticles/continueWrapUp, so simulate the
+  // first completion (all buckets done) before the finishedChunk loop.
+  if (numActiveBuckets == 0) {
+    markWalkDone();  // first completion: "bucket work done" (none for inactive)
+    for (int i = 0; i < numChunks; ++i) {
+      finishedChunk(i);
+    }
+#ifdef CUDA
+    // Inactive TPs never send work to PEList, so they never call finishWalk via
+    // finishBucket. PEList waits for all TPs on the PE; inactive TPs must check in.
+    if (!bUseCpu) {
+      for (int i = 0; i < numPEListProxies; i++) {
+        PEListProxies[i]->ckLocalBranch()->finishWalk(this);
+      }
+    }
+#endif
   }
 }
 
@@ -4574,6 +4611,10 @@ void TreePiece::calculateGravityRemote(ComputeChunkMsg *msg) {
       }
 #endif
 
+      if (particleInterRemote == NULL) {
+        CkPrintf("ERROR [%d] TP %d particleInterRemote NULL at chunk %d (calculateGravityRemote)\n", CkMyPe(), thisIndex, msg->chunkNum);
+        CkAbort("particleInterRemote NULL");
+      }
       cacheGravPart[CkMyPe()].finishedChunk(msg->chunkNum, particleInterRemote[msg->chunkNum]);
 #ifdef CHECK_WALK_COMPLETIONS
       CkPrintf("[%d] finishedChunk TreePiece::calculateGravityRemote\n", thisIndex);
@@ -4758,16 +4799,39 @@ void TreePiece::finishNodeCache(const CkCallback& cb)
 {
     int j;
 
-    // Be sure cache is synced before we finish it.
+#ifdef CACHE_CLEANUP_DBG
+    size_t nNodeBefore = cacheNode.ckLocalBranch()->getCache()->size();
+    size_t nGravBefore = cacheGravPart.ckLocalBranch()->getCache()->size();
+    size_t nSmoothBefore = cacheSmoothPart.ckLocalBranch()->getCache()->size();
+    CACHE_DBG_LOG("CACHE_CLEANUP finishNodeCache START: PE=%d thisIndex=%d node=%zu grav=%zu smooth=%zu (syncs node+grav+smooth)",
+                  CkMyPe(), thisIndex, nNodeBefore, nGravBefore, nSmoothBefore);
+#endif
+
+    // Be sure all caches are synced before we finish them. This prevents stale
+    // entries (and stale userData.d1) from persisting across domain decomp/LB.
     dm->getChunks(numChunks, prefetchRoots);
     if(numChunks > 0) {
         CkArrayIndexMax idxMax = CkArrayIndex1D(thisIndex);
+        int dummy;
         cacheNode.ckLocalBranch()->cacheSync(numChunks, idxMax, localIndex);
+        cacheGravPart.ckLocalBranch()->cacheSync(numChunks, idxMax, dummy);
+        cacheSmoothPart.ckLocalBranch()->cacheSync(numChunks, idxMax, localIndex);
     }
     
     for (j = 0; j < numChunks; j++) {
 	cacheNode.ckLocalBranch()->finishedChunk(j, 0);
+	cacheGravPart.ckLocalBranch()->finishedChunk(j,
+	    particleInterRemote != NULL ? particleInterRemote[j] : 0);
+	cacheSmoothPart.ckLocalBranch()->finishedChunk(j, 0);
     }
+
+#ifdef CACHE_CLEANUP_DBG
+    size_t nNodeAfter = cacheNode.ckLocalBranch()->getCache()->size();
+    size_t nGravAfter = cacheGravPart.ckLocalBranch()->getCache()->size();
+    size_t nSmoothAfter = cacheSmoothPart.ckLocalBranch()->getCache()->size();
+    CACHE_DBG_LOG("CACHE_CLEANUP finishNodeCache END: PE=%d thisIndex=%d node=%zu->%zu grav=%zu->%zu smooth=%zu->%zu",
+                  CkMyPe(), thisIndex, nNodeBefore, nNodeAfter, nGravBefore, nGravAfter, nSmoothBefore, nSmoothAfter);
+#endif
     contribute(cb);
     }
 
@@ -5022,8 +5086,42 @@ void TreePiece::startGravity(int am, // the active mask for multistepping
   if (numChunks == 0 && myNumParticles == 0) numChunks = 1;
   int dummy;
 
+  // Allocate particleInterRemote/nodeInterRemote early so they are valid if
+  // callbacks arrive (e.g. after migration or from stale cache). PUP sets
+  // these to NULL on unpack; allocation must happen before any cache/Compute
+  // path can touch them.
+  if (oldNumChunks != numChunks) {
+    delete[] nodeInterRemote;
+    delete[] particleInterRemote;
+    nodeInterRemote = new u_int64_t[numChunks];
+    particleInterRemote = new u_int64_t[numChunks];
+  }
+  if (nodeInterRemote == NULL)
+    nodeInterRemote = new u_int64_t[numChunks];
+  if (particleInterRemote == NULL)
+    particleInterRemote = new u_int64_t[numChunks];
+  for (int i = 0; i < numChunks; ++i) {
+    nodeInterRemote[i] = 0;
+    particleInterRemote[i] = 0;
+  }
+
+#ifdef CACHE_CLEANUP_DBG
+  size_t nNodePre = cacheNode.ckLocalBranch()->getCache()->size();
+  size_t nGravPre = cacheGravPart.ckLocalBranch()->getCache()->size();
+  size_t nSmoothPre = cacheSmoothPart.ckLocalBranch()->getCache()->size();
+  CACHE_DBG_LOG("CACHE_CLEANUP startGravity BEFORE sync: PE=%d thisIndex=%d node=%zu grav=%zu smooth=%zu",
+                CkMyPe(), thisIndex, nNodePre, nGravPre, nSmoothPre);
+#endif
+
   cacheNode.ckLocalBranch()->cacheSync(numChunks, idxMax, localIndex);
   cacheGravPart.ckLocalBranch()->cacheSync(numChunks, idxMax, dummy);
+
+#ifdef CACHE_CLEANUP_DBG
+  size_t nNodePost = cacheNode.ckLocalBranch()->getCache()->size();
+  size_t nGravPost = cacheGravPart.ckLocalBranch()->getCache()->size();
+  CACHE_DBG_LOG("CACHE_CLEANUP startGravity AFTER sync: PE=%d thisIndex=%d node=%zu->%zu grav=%zu->%zu",
+                CkMyPe(), thisIndex, nNodePre, nNodePost, nGravPre, nGravPost);
+#endif
 
   nodeLBMgrProxy.ckLocalBranch()->registerTP();
 
@@ -5049,29 +5147,13 @@ void TreePiece::startGravity(int am, // the active mask for multistepping
     bBucketsInited = true;
     return;
   }
-  
-  // allocate and zero out statistics counters
-  if (oldNumChunks != numChunks ) {
-    delete[] nodeInterRemote;
-    delete[] particleInterRemote;
-    nodeInterRemote = new u_int64_t[numChunks];
-    particleInterRemote = new u_int64_t[numChunks];
-  }
 
-  if(nodeInterRemote == NULL)
-	nodeInterRemote = new u_int64_t[numChunks];
-  if(particleInterRemote == NULL)
-	particleInterRemote = new u_int64_t[numChunks];
 #if COSMO_STATS > 0
   nodesOpenedLocal = 0;
   nodesOpenedRemote = 0;
   numOpenCriterionCalls=0;
 #endif
   nodeInterLocal = 0;
-  for (int i=0; i<numChunks; ++i) {
-    nodeInterRemote[i] = 0;
-    particleInterRemote[i] = 0;
-  }
   particleInterLocal = 0;
 
   if(verbosity>1)
@@ -6166,7 +6248,26 @@ checkWalkCorrectness();
 // This is invoked when a remote node is received from the CacheManager
 // It sets up a tree walk starting at node and initiates it
 void TreePiece::receiveNodeCallback(GenericTreeNode *node, int chunk, int reqID, int awi, void *source){
+  if (node == NULL) {
+    CkPrintf("ERROR [%d] TP %d receiveNodeCallback received NULL node (chunk %d reqID %d awi %d)\n",
+             CkMyPe(), thisIndex, chunk, reqID, awi);
+    CkAbort("receiveNodeCallback NULL node");
+  }
+  if (sRemoteGravityState == NULL || sLocalGravityState == NULL) {
+    CkPrintf("ERROR [%d] TP %d receiveNodeCallback gravity state NULL (chunk %d awi %d)\n",
+             CkMyPe(), thisIndex, chunk, awi);
+    CkAbort("receiveNodeCallback uninitialized gravity state (migration?)");
+  }
   int targetBucket = decodeReqID(reqID);
+
+  // source from userData.d1 can be a dangling pointer if callback runs on wrong PE
+  // (cache delivers before cross-PE forward). Always use bucketList for valid local ref.
+  if (targetBucket < 0 || targetBucket >= numBuckets) {
+    CkPrintf("ERROR [%d] TP %d receiveNodeCallback targetBucket=%d out of range [0,%d)\n",
+             CkMyPe(), thisIndex, targetBucket, numBuckets);
+    CkAbort("receiveNodeCallback invalid targetBucket");
+  }
+  void *sourceSafe = (void *)bucketList[targetBucket];
 
   TreeWalk *tw;
   Compute *compute;
@@ -6185,45 +6286,107 @@ void TreePiece::receiveNodeCallback(GenericTreeNode *node, int chunk, int reqID,
   }
 #endif
   // retrieve the activewalk record
-  CkAssert(awi < activeWalks.size());
+  if (awi < 0 || awi >= (int)activeWalks.size()) {
+    CkPrintf("ERROR [%d] TP %d receiveNodeCallback awi=%d out of bounds (activeWalks.size=%zu)\n",
+             CkMyPe(), thisIndex, awi, activeWalks.size());
+    CkAbort("receiveNodeCallback awi out of bounds");
+  }
 
   ActiveWalk &a = activeWalks[awi];
   tw = a.tw;
   compute = a.c;
   state = a.s;
 
-  // reassociate objects with each other
+  if (tw == NULL || compute == NULL || state == NULL) {
+    CkPrintf("ERROR [%d] TP %d receiveNodeCallback activeWalk[%d] has NULL tw=%p c=%p s=%p\n",
+             CkMyPe(), thisIndex, awi, (void*)tw, (void*)compute, (void*)state);
+    CkAbort("receiveNodeCallback invalid activeWalk (migration?)");
+  }
+
   tw->reassoc(compute);
-  compute->reassoc(source, activeRung, a.o);
-
-  // resume walk
+  compute->reassoc(sourceSafe, activeRung, a.o);
   tw->resumeWalk(node, state, chunk, reqID, awi);
-
-  // we need source to update the counters in all buckets
-  // underneath the source. note that in the interlist walk,
-  // the computeEntity of the compute will likely  have changed as the walk continued.
-  // however, the resumeWalk function takes care to set it back to 'source'
-  // after it is done walking.
   compute->nodeRecvdEvent(this,chunk,state,targetBucket);
+}
+
+void TreePiece::receiveNodeCallbackFromRemote(RecvNodeCallbackMsg *msg) {
+  Tree::BinaryTreeNode *node = (Tree::BinaryTreeNode *)(msg->nodeData + PAD_reply);
+  node->unpackNodes();
+  void *source = (void *)bucketList[decodeReqID(msg->reqID)];
+  receiveNodeCallback(node, msg->chunk, msg->reqID, msg->awi, source);
+  CkFreeMsg(msg);
+}
+
+void TreePiece::receiveParticlesCallbackFromRemote(RecvParticlesCallbackMsg *msg) {
+  void *sourceSafe = (void *)bucketList[decodeReqID(msg->reqID)];
+  Tree::NodeKey remoteBucket = msg->key;
+  receiveParticlesCallback(msg->particles, msg->num, msg->chunk, msg->reqID, remoteBucket, msg->awi, sourceSafe);
+  CkFreeMsg(msg);
+}
+
+void TreePiece::receiveParticlesFullCallbackFromRemote(RecvParticlesFullCallbackMsg *msg) {
+  void *sourceSafe = (void *)bucketList[decodeReqID(msg->reqID)];
+  Tree::NodeKey remoteBucket = msg->key;
+  int nTotal = 1 + msg->end - msg->begin;
+  GravityParticle *partCached = new GravityParticle[nTotal];
+  CkAssert(sizeof(extraSPHData) > sizeof(extraStarData));
+  extraSPHData *extraSPHCached = new extraSPHData[msg->nActual];
+  int j = 0;
+  for (int i = 0; i < nTotal; i++) {
+    if (j < msg->nActual && i == msg->partExt[j].iBucketOff) {
+      partCached[i].extraData = &extraSPHCached[j];
+      msg->partExt[j].getParticle(&partCached[i]);
+      CkAssert(TYPETest(&partCached[i], globalSmoothParams->iType));
+      globalSmoothParams->initSmoothCache(&partCached[i]);
+      j++;
+    } else {
+      partCached[i].iType = 0;
+    }
+  }
+  CkAssert(j == msg->nActual);
+  pendingRecvdPartAlloc = partCached;
+  pendingRecvdExtraAlloc = extraSPHCached;
+  receiveParticlesFullCallback(partCached, nTotal, msg->chunk, msg->reqID, remoteBucket, msg->awi, sourceSafe);
+  pendingRecvdPartAlloc = NULL;
+  pendingRecvdExtraAlloc = NULL;
+  CkFreeMsg(msg);
 }
 
 void TreePiece::receiveParticlesCallback(ExternalGravityParticle *egp, int num, int chunk, int reqID, Tree::NodeKey &remoteBucket, int awi, void *source){
   Compute *c;
   State *state;
 
-  CkAssert(awi < maxAwi);
-  
-  // retrieve the activewalk record
+  // Always use bucketList-derived source. userData.d1 (source) can be NULL or stale
+  // after cache/migration; receiveNodeCallback and serialize path use bucketList.
+  int reqIDlist = decodeReqID(reqID);
+  if (reqIDlist < 0 || reqIDlist >= (int)numBuckets) {
+    CkPrintf("ERROR [%d] TP %d receiveParticlesCallback reqIDlist=%d out of range [0,%d)\n",
+             CkMyPe(), thisIndex, reqIDlist, (int)numBuckets);
+    CkAbort("receiveParticlesCallback invalid reqID");
+  }
+  void *sourceSafe = (void *)bucketList[reqIDlist];
+
+  if (awi < 0 || awi >= (int)activeWalks.size()) {
+    CkPrintf("ERROR [%d] TP %d receiveParticlesCallback awi=%d out of bounds (activeWalks.size=%zu)\n",
+             CkMyPe(), thisIndex, awi, activeWalks.size());
+    CkAbort("receiveParticlesCallback awi out of bounds");
+  }
+
   ActiveWalk &a = activeWalks[awi];
-  //tw = a.tw;
   c = a.c;
   state = a.s;
 
+  if (c == NULL || state == NULL) {
+    CkPrintf("ERROR [%d] TP %d receiveParticlesCallback activeWalk[%d] has NULL c=%p s=%p\n",
+             CkMyPe(), thisIndex, awi, (void*)c, (void*)state);
+    CkAbort("receiveParticlesCallback invalid activeWalk (migration?)");
+  }
+
 #ifdef CHANGA_REFACTOR_INTERLIST_PRINT_BUCKET_START_FIN
-  if(source){
+  if(sourceSafe){
     int start, end;
 
-    GenericTreeNode *testSource = (GenericTreeNode *)source;
+    GenericTreeNode *testSource = (GenericTreeNode *)sourceSafe;
     getBucketsBeneathBounds(testSource, start, end);
 
     CkPrintf("[%d] tgt=%d recv particles %ld source = %ld (%d - %d) buckRem = %d + %d, remChunk = %d\n",thisIndex,decodeReqID(reqID), remoteBucket, testSource->getKey(), start, end, sRemoteGravityState->counterArrays[0][decodeReqID(reqID)], sLocalGravityState->counterArrays[0][decodeReqID(reqID)], sRemoteGravityState->counterArrays[1][chunk]);
@@ -6254,7 +6417,7 @@ void TreePiece::receiveParticlesCallback(ExternalGravityParticle *egp, int num, 
       CkAssert(0);
       }
   
-  c->reassoc(source, activeRung, a.o);
+  c->reassoc(sourceSafe, activeRung, a.o);
   c->recvdParticles(egp,num,chunk,reqID,state,this, remoteBucket);
 }
 
@@ -6265,13 +6428,34 @@ void TreePiece::receiveParticlesFullCallback(GravityParticle *gp, int num,
   Compute *c;
   State *state;
 
-  // retrieve the activewalk record
+  // Always use bucketList-derived source. userData.d1 (source) can be NULL or stale
+  // after cache/migration; receiveNodeCallback and serialize path use bucketList.
+  int reqIDlist = decodeReqID(reqID);
+  if (reqIDlist < 0 || reqIDlist >= (int)numBuckets) {
+    CkPrintf("ERROR [%d] TP %d receiveParticlesFullCallback reqIDlist=%d out of range [0,%d)\n",
+             CkMyPe(), thisIndex, reqIDlist, (int)numBuckets);
+    CkAbort("receiveParticlesFullCallback invalid reqID");
+  }
+  void *sourceSafe = (void *)bucketList[reqIDlist];
+
+  if (awi < 0 || awi >= (int)activeWalks.size()) {
+    CkPrintf("ERROR [%d] TP %d receiveParticlesFullCallback awi=%d out of bounds (activeWalks.size=%zu)\n",
+             CkMyPe(), thisIndex, awi, activeWalks.size());
+    CkAbort("receiveParticlesFullCallback awi out of bounds");
+  }
+
   ActiveWalk &a = activeWalks[awi];
   c = a.c;
   state = a.s;
 
-  c->reassoc(source, activeRung, a.o);
-  c->recvdParticlesFull(gp,num,chunk,reqID,state,this, remoteBucket);
+  if (c == NULL || state == NULL) {
+    CkPrintf("ERROR [%d] TP %d receiveParticlesFullCallback activeWalk[%d] has NULL c=%p s=%p\n",
+             CkMyPe(), thisIndex, awi, (void*)c, (void*)state);
+    CkAbort("receiveParticlesFullCallback invalid activeWalk (migration?)");
+  }
+
+  c->reassoc(sourceSafe, activeRung, a.o);
+  c->recvdParticlesFull(gp,num,chunk,reqID,state,this, remoteBucket, pendingRecvdPartAlloc, pendingRecvdExtraAlloc);
 }
 
 void TreePiece::addActiveWalk(int iAwi, TreeWalk *tw, Compute *c, Opt *o,

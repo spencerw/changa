@@ -509,6 +509,32 @@ void DataManager::serializeLocalTree(){
 
 /// @brief Get the data produced by TreePiece::EwaldInit and launch the Ewald kernel on the GPU
 void DataManager::startEwaldGPU() {
+  if (savedNumTotalParticles <= 0 || d_localParts == nullptr || d_localVars == nullptr) {
+    for (int i = 0; i < registeredTreePieces.length(); i++) {
+      int in = registeredTreePieces[i].treePiece->getIndex();
+      treePieces[in].cudaFinishAllBuckets(1);
+    }
+    return;
+  }
+
+  TreePiece *tp = NULL;
+  for (int i = 0; i < registeredTreePieces.length(); i++) {
+    TreePiece *candidate = registeredTreePieces[i].treePiece;
+    if (candidate->root != NULL && candidate->ewt != NULL && candidate->nEwhLoop > 0) {
+      tp = candidate;
+      break;
+    }
+  }
+  if (tp == NULL) {
+    CkAbort("DataManager::startEwaldGPU: no TreePiece with valid Ewald data (root, ewt, nEwhLoop)");
+  }
+
+  int nEwhLoop = tp->nEwhLoop;
+  if (nEwhLoop > NEWH) {
+    CkAbort("DataManager::startEwaldGPU: nEwhLoop (%d) exceeds NEWH (%d); increase NEWH in EwaldCUDA.h",
+            nEwhLoop, NEWH);
+  }
+
 #ifdef PINNED_HOST_MEMORY
   const char* funcTag = "DataManager::startEwaldGPU";
   hostMalloc(&ewt, sizeof(EwtData)*NEWH, funcTag);
@@ -518,11 +544,6 @@ void DataManager::startEwaldGPU() {
   cachedData = (EwaldReadOnlyData *) malloc(sizeof(EwaldReadOnlyData));
 #endif
 
-  // Note that much of this data is calculated per TreePiece. It's all identical,
-  // so we just pull from the first TreePiece
-  TreePiece *tp = registeredTreePieces[0].treePiece;
-
-  int nEwhLoop = tp->nEwhLoop;
   MultipoleMoments *mm = &tp->root->moments;
   for (int i=0; i<nEwhLoop; i++) {
     ewt[i].hx = (cudatype) tp->ewt[i].hx;
@@ -1212,7 +1233,6 @@ void DataManager::transferParticleVarsBack(){
     data->buf = buf;
     data->size = savedNumTotalParticles;
 
-    if(verbosity > 1) CkPrintf("[%d] transferParticleVarsBack\n", CkMyPe());
     TransferParticleVarsBack(buf, 
                              savedNumTotalParticles*sizeof(VariablePartData),
 			     d_localVars,
@@ -1256,13 +1276,25 @@ void updateParticlesCallback(void *param, void *msg){
 }
 
 /// @brief clean up buffer for GPU transfer back.
+/// Minimize critical section: only hold __nodelock for counter update.
+/// Expensive cleanup (gpuFree, hostFree, cudaDeviceSynchronize) runs outside
+/// the lock to avoid lock-ordering/deadlock issues when multiple PEs contend.
 void DataManager::updateParticlesFreeMemory(UpdateParticlesStruct *data)
 {
-    CmiLock(__nodelock);
-    treePiecesParticlesUpdated++;
-    if(treePiecesParticlesUpdated == registeredTreePieces.length()){
-        treePiecesParticlesUpdated = 0;
+    bool doCleanup = false;
+    {
+        CmiLock(__nodelock);
+        treePiecesParticlesUpdated++;
+        int total = (int)registeredTreePieces.length();
+        if(treePiecesParticlesUpdated == total){
+            treePiecesParticlesUpdated = 0;
+            doCleanup = true;
+        }
+        CmiUnlock(__nodelock);
+    }
+    if (!doCleanup) return;
 
+    // Cleanup outside lock: only one PE reaches here; no contention.
     // Free host buffers for remote chunk data
 #ifdef PINNED_HOST_MEMORY
     const char* funcTagHost = "DataManager::updateParticlesFreeMemory";
@@ -1294,20 +1326,17 @@ void DataManager::updateParticlesFreeMemory(UpdateParticlesStruct *data)
     d_remoteMoments = nullptr;
     d_remoteParts = nullptr;
 
-        if(data->size > 0){
+    if(data->size > 0){
 #ifdef PINNED_HOST_MEMORY
-            const char* funcTag = "DataManager::updateParticlesFreeMemory";
-            hostFree(data->buf, funcTag);
+        const char* funcTagBuf = "DataManager::updateParticlesFreeMemory";
+        hostFree(data->buf, funcTagBuf);
 #else
-            free(data->buf);
+        free(data->buf);
 #endif
-        }
-        delete (data->cb);
-        delete data;
-        cudaDeviceSynchronize();
-
     }
-    CmiUnlock(__nodelock);
+    delete (data->cb);
+    delete data;
+    cudaDeviceSynchronize();
 }
 
 // After after each BigStep, trims the host pool to reclaim memory

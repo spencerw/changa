@@ -2426,7 +2426,9 @@ void Main::advanceBigStep(int iStep) {
     
     if(!param.bStaticTest) {
         // Closing Kick
+        CkPrintf("BRK kick_BEFORE\n");
         kick(true, activeRung, nextMaxRung, cbGravity, gravStartTime);
+        CkPrintf("BRK kick_AFTER\n");
         //SIDM needs to check that it is on on active rung?
         if (activeRung == 0 ) {
             doSIDM(dTime,RungToDt(param.dDelta, activeRung), activeRung);
@@ -2476,7 +2478,9 @@ void Main::advanceBigStep(int iStep) {
 
     double startTime = CkWallTimer();
     CkPrintf("Elapsed time: %g\n", startTime - dSimStartTime);
+    CkPrintf("BRK finishNodeCache_BEFORE\n");
     treeProxy.finishNodeCache(CkCallbackResumeThread());
+    CkPrintf("BRK finishNodeCache_AFTER\n");
     double tCache = CkWallTimer() - startTime;
     timings[activeRung].tCache += tCache;
     if(verbosity)

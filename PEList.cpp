@@ -40,13 +40,15 @@ void PEList::finishWalk(TreePiece *treePiece) {
 /// @brief Called from DataManager after remote transfer finishes. Launch our kernel if it was delayed
 void PEList::tryLaunchDelayedKernel() {
     if (bKernelDelayed) {
+        if (verbosity > 3)
+            CkPrintf("[%d] PEList::tryLaunchDelayedKernel launching kernel\n", CkMyPe());
         launchKernel();
     }
 }
 
 void PEList::finishWalkCb() {
-     dMProxy.ckLocalBranch()->transferParticleVarsBack();
-     reset();
+    dMProxy.ckLocalBranch()->transferParticleVarsBack();
+    reset();
 }
 
 /// @brief Launch the corresponding CUDA kernel, depending what type of request this was
