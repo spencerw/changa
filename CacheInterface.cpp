@@ -2,15 +2,14 @@
 ///
 /// Implementation of the interfaces used by the CacheManager.
 ///
+#include <cstdio>
+#include <cstdlib>
 #include "CacheInterface.h"
 #include "ParallelGravity.h"
 #include "Opt.h"
 #include "smooth.h"
 #include "Compute.h"
 #include "TreeWalk.h"
-
-static const int PAD_reply = sizeof(NodeKey);  // Assume this is bigger
-                                           // than a pointer
 
 EntryTypeGravityParticle::EntryTypeGravityParticle() {
   CkCacheFillMsg<KeyType> msg(0);
@@ -428,10 +427,24 @@ int EntryTypeGravityNode::size(void * data) {
 }
 
 void EntryTypeGravityNode::callback(CkArrayID requestorID, CkArrayIndexMax &requestorIdx, KeyType key, CkCacheUserData &userData, void *data, int chunk) {
+  if (data == NULL) {
+    CkPrintf("ERROR [%d] EntryTypeGravityNode::callback received NULL data (requestor %d, chunk %d)\n",
+             CkMyPe(), (int)requestorIdx.data()[0], chunk);
+    CkAbort("EntryTypeGravityNode::callback NULL data");
+  }
+  CProxy_TreePiece requestorProxy(requestorID);
   CkArrayIndex1D idx(requestorIdx.data()[0]);
-  CProxyElement_TreePiece elem(requestorID, idx);
+  int requestorPe = requestorProxy.ckLocMgr()->whichPe(idx);
+  if (requestorPe < 0) {
+    CkPrintf("ERROR [%d] EntryTypeGravityNode::callback cannot determine PE for requestor %d\n",
+             CkMyPe(), (int)requestorIdx.data()[0]);
+    CkAbort("EntryTypeGravityNode::callback whichPe failed");
+  }
   int reqID = (int)(userData.d0 & 0xFFFFFFFF);
   int awi = userData.d0 >> 32;
+
+  CkAssert(requestorPe == CkMyPe() && "Node cache callback should never target TreePiece on different PE");
+  CProxyElement_TreePiece elem(requestorID, idx);
   void *source = (void *)userData.d1;
   elem.receiveNodeCallback((Tree::GenericTreeNode*)data, chunk, reqID, awi, source);
 }
