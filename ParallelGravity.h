@@ -1540,7 +1540,6 @@ public:
 			 double fEwCut, double fEwhCut, int bPeriod,
                          int bComove, double dRhoFac);
 	void BucketEwald(GenericTreeNode *req, int nReps,double fEwCut);
-       void ewaldCPU();
        void calculateEwald(dummyMsg *msg);
        void calculateEwaldUsingCkLoop(dummyMsg *msg, int yield_num);
   void callBucketEwald(int id);

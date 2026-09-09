@@ -4177,9 +4177,6 @@ void TreePiece::calculateGravityLocal() {
   doAllBuckets();
 }
 
-void TreePiece::ewaldCPU() {
-}
-
 /// @brief Start the ewald calculation on this TreePiece
 void TreePiece::calculateEwald(dummyMsg *msg) {
   if (bUseCpu)
