@@ -49,11 +49,6 @@ class PEList : public CBase_PEList
     /// Flags whether the GPU kernel launch was delayed due to the data transfer
     int bKernelDelayed;
 
-    CudaMultipoleMoments *d_localMoments;
-    CompactPartData *d_localParts;
-    VariablePartData *d_localVars;
-    CompactPartData *d_remoteParts;
-    CudaMultipoleMoments *d_remoteMoments;
     cudaStream_t stream;
     CkCallback *finishCb;
 

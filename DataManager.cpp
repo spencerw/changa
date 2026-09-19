@@ -610,7 +610,6 @@ void DataManager::startEwaldGPU() {
   cachedData->mm.cmx = (cudatype) mm->cm.x;
   cachedData->mm.cmy = (cudatype) mm->cm.y;
   cachedData->mm.cmz = (cudatype) mm->cm.z;
-  cachedData->n = savedNumTotalParticles-1;
   cachedData->fEwCut = (cudatype) fEwCut;
   cachedData->nReps = nReplicas;
   cachedData->nEwReps = (int) ceil(fEwCut);
@@ -635,7 +634,8 @@ void DataManager::startEwaldGPU() {
   ewaldCallback
     = new CkCallback(CkIndex_DataManager::finishEwaldGPU(), CkMyNode(), dMProxy);
 
-  DataManagerEwald(d_localParts, d_localVars, ewtGPU, cachedData, savedNumTotalParticles-1, stream, ewaldCallback);
+  DataManagerEwald(d_localParts, d_localVars, ewtGPU, cachedData,
+                   savedNumTotalParticles, stream, ewaldCallback);
 }
 
 /// @brief Callback from Ewald kernel launch on GPU
@@ -860,7 +860,6 @@ void DataManager::donePrefetch(int chunk){
 				   (void **)&d_remoteMoments,  (void **)&d_remoteParts,
 				   stream,
 				   remoteChunkTransferCallback);
-    bRemoteDataTransferred.store(true);
   }
   CmiUnlock(__nodelock);
 }
